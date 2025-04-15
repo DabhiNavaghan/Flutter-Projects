@@ -1,320 +1,262 @@
-import 'dart:developer';
-
-import 'package:events_discovery/presentation/home/compo/review_eventcard.dart';
-import 'package:events_discovery/presentation/home/sections_components/global_events_section.dart';
-
 import '../../../discovery_app.dart';
-import '../../dashboard/dashboard/compo/top_organisers_around.dart';
-import '../../feed/compo/curated_bucket_home.dart';
-import '../../profile/compo/profile_home_header.dart';
-import '../../search/compo/recent_viewed_events_section.dart';
-import '../../search/screen/invalid_city_compo.dart';
-import '../../search/shimmer/home_shimmer.dart';
-import '../../welcome/screens/category_select_screen.dart';
-import '../compo/end_screen_compo.dart';
-import '../compo/home_cache_handling.dart';
-import '../compo/home_dates_filter.dart';
-import '../compo/home_friends_to_follow.dart';
-import '../compo/home_people_tofollow.dart';
-import '../compo/home_popular_section.dart';
-import '../compo/home_screen_appbar.dart';
-import '../compo/home_trending_categories.dart';
-import '../compo/interested_bucket_home.dart';
-import '../compo/onboarding_popup.dart';
-import '../compo/upcoming_events_buckets.dart';
-import '../event_compo/featured_events.dart';
 
-class HomeScreen extends StatefulHookConsumerWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  ConsumerState<ConsumerStatefulWidget> createState() => _HomeScreenState();
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> {
+  final ScrollController _scrollController = ScrollController();
+  final double searchBarHeight = 80;
+
+  // This will be determined dynamically based on your actual data
+  final List<String> featuredEvents = ["Concert in the Park", "Tech Conference 2025", "Food Festival", "Festival", "Art Exhibition", "Art "];
+
+  // Key to measure the size of the featured events section
+  final GlobalKey _featuredEventsKey = GlobalKey();
+
+  // Threshold when search bar should start scrolling
+  double _scrollThreshold = 0;
+  bool _thresholdCalculated = false;
+  bool _isSearchBarPinned = true;
+
   @override
   void initState() {
     super.initState();
-    ref.read(homeProvider).homeScreenInitialMethod();
-    
-    // Add scroll listener to update filter chips visibility
+    _scrollController.addListener(_onScroll);
+
+    // Schedule a post-frame callback to calculate the threshold after layout
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(homeProvider).scrollController?.addListener(_handleScroll);
+      _calculateScrollThreshold();
     });
   }
-  
+
   @override
   void dispose() {
-    ref.read(homeProvider).scrollController?.removeListener(_handleScroll);
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     super.dispose();
   }
-  
-  void _handleScroll() {
-    final scrollController = ref.read(homeProvider).scrollController;
-    if (scrollController == null || !scrollController.hasClients) return;
-    
-    final offset = scrollController.offset;
-    final showFilterChips = ref.read(homeProvider).showFilterChips;
-    
-    if (offset > 150 && !showFilterChips) {
-      ref.read(homeProvider).setShowFilterChips(true);
-    } else if (offset <= 150 && showFilterChips) {
-      ref.read(homeProvider).setShowFilterChips(false);
+
+  void _calculateScrollThreshold() {
+    // Get the size of the featured events section
+    final RenderBox? featuredEventsBox = _featuredEventsKey.currentContext?.findRenderObject() as RenderBox?;
+
+    if (featuredEventsBox != null) {
+      // The threshold is the distance from top of scroll view to bottom of search bar
+      // This equals the height of the featured events section
+      _scrollThreshold = featuredEventsBox.size.height;
+      _thresholdCalculated = true;
+      setState(() {});
+    }
+  }
+
+  void _onScroll() {
+    if (!_thresholdCalculated) return;
+
+    // Check if we've scrolled past the threshold
+    final shouldPin = _scrollController.offset < _scrollThreshold;
+
+    if (shouldPin != _isSearchBarPinned) {
+      setState(() {
+        _isSearchBarPinned = shouldPin;
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: () async {
-          ref.read(homeProvider).getArtistList();
-          await ref.refresh(bucketEventsFutureProvider.future).then((value) {});
-        },
-        child: Stack(
-          children: [
-            CustomScrollView(
-              controller: ref.watch(homeProvider).scrollController,
-              slivers: [
-                const HomeScreenAppBar(),
-                // Global Events Section with proper sliver integration
-                const GlobalEventsSection(),
-                SliverToBoxAdapter(
-                  child: ListView.builder(
-                    itemCount: 1,
-                    shrinkWrap: true,
-                    physics: const ScrollPhysics(),
-                    padding: EdgeInsets.zero,
-                    itemBuilder: (BuildContext context, int topIndex) {
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          ref.watch(userProvider).fetchingUserProfile || ref.watch(userProvider).currentAeUser == null ? const Sbe() : const ProfileHomeHeader(),
-                          ref.watch(bucketEventsFutureProvider).when(
-                                skipLoadingOnRefresh: false,
-                                skipLoadingOnReload: true,
-                                data: (bucketData) {
-                                  final isFeaturedEventsAvailable = (bucketData.data ?? []).isNotEmpty ? ((bucketData.data ?? []).first.title ?? "").toLowerCase().contains('featured') : false;
-                                  final bucketEventsList = (bucketData.data ?? []).where((element) => !(element.title ?? "").toLowerCase().contains('featured')).toList();
-                                  return !ref.watch(authProvider).isConnectedToNetwork
-                                      ? const Center(child: InternetPlaceholder())
-                                      : bucketData.data!.isEmpty && bucketData.error == "1"
-                                          ? const Center(child: InvalidCityCompo())
-                                          : bucketData.data!.length == 1 && bucketData.data![0].title!.contains('around')
-                                              ? InvalidCityCompo(bucket: bucketData.data![0])
-                                              : Column(
-                                                  mainAxisAlignment: MainAxisAlignment.start,
-                                                  children: [
-                                                    !isFeaturedEventsAvailable
-                                                        ? const SizedBox()
-                                                        : Padding(
-                                                            padding: EdgeInsets.symmetric(horizontal: 10.sp),
-                                                            child: HomeArrowHeading(
-                                                              title: bucketData.data![0].title!.replaceFirst('in ${ref.watch(locationProvider).selectedCity?.city}', '').replaceFirst("around ${ref.watch(locationProvider).selectedCity?.city}", 'around'),
-                                                              onViewMore: () {},
-                                                            ),
-                                                          ),
-                                                    !isFeaturedEventsAvailable ? const SizedBox() : FeaturedEvents(features: bucketData.data![0].events!, titleTag: bucketData.data![0].title!),
-                                                    ref.watch(categoryLocationFutureProvider).when(
-                                                      data: (bucketData) {
-                                                        return bucketData.isEmpty ? const SizedBox() : HomeTrendingCategories(categories: bucketData);
-                                                      },
-                                                      error: (error, stackTrace) {
-                                                        return const SizedBox();
-                                                      },
-                                                      loading: () {
-                                                        return const HomeTrendingShimmer();
-                                                      },
-                                                    ),
-                                                    SizedBox(height: 20.sp),
-                                                    const HomeFriendsToFollow(source: 'Tab: Home: ${KStrings.friendsToFollow}'),
-                                                    UpcomingEventsBucketHome(tabs: bucketData.tabs),
-                                                    const CuratedEventsBucketHome(),
-                                                    ref.watch(recentlyViewedFutureProvider).when(data: (eventItem) {
-                                                      return eventItem.isEmpty ? Sbh(h: 20.sp) : const Sbe();
-                                                    }, error: (error, stackTrace) {
-                                                      return const Sbe();
-                                                    }, loading: () {
-                                                      return const Sbe();
-                                                    }),
-                                                    const RecentViewedEventsSection(source: "Tab: Home"),
-                                                    if (bucketEventsList.length < 4)
-                                                      Column(
-                                                        children: [
-                                                          ListView.builder(
-                                                            padding: EdgeInsets.zero,
-                                                            itemCount: bucketEventsList.length,
-                                                            shrinkWrap: true,
-                                                            physics: const ScrollPhysics(),
-                                                            itemBuilder: (BuildContext context, int index) {
-                                                              return PopularHomeSection(bucket: bucketEventsList[index]);
-                                                            },
-                                                          ),
-                                                          const ArtistsOnTourSection(),
-                                                          SizedBox(height: 20.sp),
-                                                          HomePeopleToFollow(banner: bucketData.banners!.friendsBanner ?? ""),
-                                                        ],
-                                                      )
-                                                    // if more than 7
-                                                    else if (bucketEventsList.length > 7)
-                                                      Column(
-                                                        children: [
-                                                          ListView.builder(
-                                                            padding: EdgeInsets.zero,
-                                                            itemCount: bucketEventsList.take(2).length,
-                                                            shrinkWrap: true,
-                                                            physics: const ScrollPhysics(),
-                                                            itemBuilder: (BuildContext context, int index) {
-                                                              return PopularHomeSection(bucket: bucketEventsList[index]);
-                                                            },
-                                                          ),
-                                                          const ArtistsOnTourSection(),
-                                                          SizedBox(height: 20.sp),
-                                                          ListView.builder(
-                                                            padding: EdgeInsets.zero,
-                                                            itemCount: bucketEventsList.skip(4).toList().take(2).length,
-                                                            shrinkWrap: true,
-                                                            physics: const ScrollPhysics(),
-                                                            itemBuilder: (BuildContext context, int index) {
-                                                              final bucketEvents = bucketEventsList.skip(2).toList().take(2).toList()[index];
-                                                              return PopularHomeSection(bucket: bucketEvents);
-                                                            },
-                                                          ),
-                                                          const HomeDatesFilter(),
-                                                          ListView.builder(
-                                                            padding: EdgeInsets.zero,
-                                                            itemCount: bucketEventsList.skip(4).toList().take(2).length,
-                                                            shrinkWrap: true,
-                                                            physics: const ScrollPhysics(),
-                                                            itemBuilder: (BuildContext context, int index) {
-                                                              final bucketEvents = bucketEventsList.skip(4).toList().take(2).toList()[index];
-                                                              return PopularHomeSection(bucket: bucketEvents);
-                                                            },
-                                                          ),
-                                                          HomePeopleToFollow(banner: bucketData.banners!.friendsBanner ?? ""),
-                                                          ListView.builder(
-                                                            padding: EdgeInsets.zero,
-                                                            itemCount: bucketEventsList.skip(6).toList().take(2).length,
-                                                            shrinkWrap: true,
-                                                            physics: const ScrollPhysics(),
-                                                            itemBuilder: (BuildContext context, int index) {
-                                                              final bucketEvents = bucketEventsList.skip(6).toList().take(2).toList()[index];
-                                                              return PopularHomeSection(bucket: bucketEvents);
-                                                            },
-                                                          ),
-                                                          TopOrganizersAroundSection(source: "Tab: Home", bottomPadding: 12.sp),
-                                                          ListView.builder(
-                                                            padding: EdgeInsets.zero,
-                                                            itemCount: bucketEventsList.skip(8).length,
-                                                            shrinkWrap: true,
-                                                            physics: const ScrollPhysics(),
-                                                            itemBuilder: (BuildContext context, int index) {
-                                                              final bucketEvents = bucketEventsList.skip(8).toList()[index];
-                                                              return PopularHomeSection(bucket: bucketEvents);
-                                                            },
-                                                          ),
-                                                        ],
-                                                      )
-                                                    // between 4-7 buckets
-                                                    else
-                                                      Column(
-                                                        children: [
-                                                          ListView.builder(
-                                                            padding: EdgeInsets.zero,
-                                                            itemCount: bucketEventsList.take(1).length,
-                                                            shrinkWrap: true,
-                                                            physics: const ScrollPhysics(),
-                                                            itemBuilder: (BuildContext context, int index) {
-                                                              return PopularHomeSection(
-                                                                bucket: bucketEventsList[index],
-                                                              );
-                                                            },
-                                                          ),
-                                                          const ArtistsOnTourSection(),
-                                                          SizedBox(height: 20.sp),
-                                                          ListView.builder(
-                                                            padding: EdgeInsets.zero,
-                                                            itemCount: bucketEventsList.skip(1).toList().take(1).length,
-                                                            shrinkWrap: true,
-                                                            physics: const ScrollPhysics(),
-                                                            itemBuilder: (BuildContext context, int index) {
-                                                              final bucketEvents = bucketEventsList.skip(1).toList().take(1).toList()[index];
-                                                              return PopularHomeSection(bucket: bucketEvents);
-                                                            },
-                                                          ),
-                                                          const HomeDatesFilter(),
-                                                          ListView.builder(
-                                                            padding: EdgeInsets.zero,
-                                                            itemCount: bucketEventsList.skip(2).toList().take(1).length,
-                                                            shrinkWrap: true,
-                                                            physics: const ScrollPhysics(),
-                                                            itemBuilder: (BuildContext context, int index) {
-                                                              final bucketEvents = bucketEventsList.skip(2).toList().take(1).toList()[index];
-                                                              return PopularHomeSection(bucket: bucketEvents);
-                                                            },
-                                                          ),
-                                                          HomePeopleToFollow(banner: bucketData.banners!.friendsBanner ?? ""),
-                                                          ListView.builder(
-                                                            padding: EdgeInsets.zero,
-                                                            itemCount: bucketEventsList.skip(3).toList().length,
-                                                            shrinkWrap: true,
-                                                            physics: const ScrollPhysics(),
-                                                            itemBuilder: (BuildContext context, int index) {
-                                                              final bucketEvents = bucketEventsList.skip(3).toList()[index];
-                                                              return PopularHomeSection(bucket: bucketEvents);
-                                                            },
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    const InterestedBucketHome(),
-                                                    const EndScreenCompo(),
-                                                  ],
-                                                );
-                                },
-                                error: (error, stackTrace) {
-                                  log("Error on ${error.toString()}");
-                                  return ErrorPlaceholder(
-                                    onCtaCallback: () async {
-                                      ref.read(homeProvider).getArtistList();
-                                      await ref.refresh(bucketEventsFutureProvider.future).then((value) {});
-                                    },
-                                  );
-                                },
-                                loading: () {
-                                  return const HomeCacheHandling();
-                                },
-                              ),
-                        ],
-                      );
-                    },
-                  ),
+      body: CustomScrollView(
+        controller: _scrollController,
+        slivers: [
+          // AppBar with city and notification icons
+          SliverAppBar(
+            backgroundColor: Colors.white,
+            pinned: true,
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text("📍 City Name", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black)),
+                Row(
+                  children: [
+                    IconButton(icon: Icon(Icons.confirmation_num, color: Colors.black), onPressed: () {}),
+                    IconButton(icon: Icon(Icons.notifications, color: Colors.black), onPressed: () {}),
+                  ],
                 ),
               ],
             ),
-            // Onboarding popup
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 1000),
-              curve: Curves.easeInOut,
-              bottom: ref.watch(showcaseProvider).isShowCaseVisible ? 0 : -48.sp,
-              left: 0,
-              right: 0,
-              child: GestureDetector(
-                onTap: () {},
-                child: const OnboardingPopup(),
+            centerTitle: false,
+          ),
+
+          // Search Bar (pinned or not based on scroll position)
+          SliverPersistentHeader(
+            pinned: _isSearchBarPinned,
+            delegate: _SearchBarDelegate(
+              expandedHeight: searchBarHeight,
+            ),
+          ),
+
+          // Category events (horizontal carousels)
+          SliverToBoxAdapter(
+            child: Container(
+              key: _featuredEventsKey, // Use this key to measure height
+              child: _buildCategoryEvents(),
+            ),
+          ),
+
+          // Sticky Filter Chips
+          SliverPersistentHeader(
+            pinned: true,
+            delegate: _StickyFilterChipsDelegate(),
+          ),
+
+          // Paginated ListView
+          SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                // build your paginated event item here
+                return Card(
+                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.all(16),
+                    title: Text(
+                      "Event ${index + 1}",
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: const [
+                        SizedBox(height: 8),
+                        Text('April 15, 2025 • 8:00 PM'),
+                        SizedBox(height: 4),
+                        Text('Some venue location here'),
+                      ],
+                    ),
+                    leading: Container(
+                      width: 60,
+                      height: 60,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[400],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.event),
+                    ),
+                  ),
+                );
+              },
+              childCount: 50, // replace with actual item count
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCategoryEvents() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4.0, bottom: 8.0),
+            child: Text("Featured Events", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          ),
+          ...List.generate(featuredEvents.length, (index) {
+            return Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.amber[100],
+                borderRadius: BorderRadius.circular(12),
               ),
-            ),
-            // Feedback popup
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 400),
-              curve: Curves.easeInOut,
-              bottom: ref.watch(homeProvider).isShowFeedbackPopup ? 0 : -80.sp,
-              left: 0,
-              right: 0,
-              child: ReviewEventCard(),
-            ),
+              child: Text(featuredEvents[index], style: const TextStyle(fontSize: 16)),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+// Search Bar Delegate
+class _SearchBarDelegate extends SliverPersistentHeaderDelegate {
+  final double expandedHeight;
+
+  _SearchBarDelegate({
+    required this.expandedHeight,
+  });
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    final double offset = shrinkOffset.clamp(0.0, expandedHeight);
+
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      alignment: Alignment.center,
+      transform: Matrix4.translationValues(0, -offset, 0),
+      child: TextField(
+        decoration: InputDecoration(
+          hintText: "Search events...",
+          prefixIcon: Icon(Icons.search),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          filled: true,
+          fillColor: Colors.grey[100],
+          contentPadding: EdgeInsets.symmetric(vertical: 12),
+        ),
+      ),
+    );
+  }
+
+  @override
+  double get maxExtent => expandedHeight;
+
+  @override
+  double get minExtent => expandedHeight;
+
+  @override
+  bool shouldRebuild(covariant SliverPersistentHeaderDelegate oldDelegate) => true;
+}
+
+// Filter Chips Delegate
+class _StickyFilterChipsDelegate extends SliverPersistentHeaderDelegate {
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      child: SizedBox(
+        height: 40,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          children: [
+            FilterChip(label: Text("All"), selected: true, onSelected: (_) {}),
+            SizedBox(width: 8),
+            FilterChip(label: Text("Music"), selected: false, onSelected: (_) {}),
+            SizedBox(width: 8),
+            FilterChip(label: Text("Tech"), selected: false, onSelected: (_) {}),
+            SizedBox(width: 8),
+            FilterChip(label: Text("Sports"), selected: false, onSelected: (_) {}),
+            SizedBox(width: 8),
+            FilterChip(label: Text("Art"), selected: false, onSelected: (_) {}),
+            SizedBox(width: 8),
+            FilterChip(label: Text("Food"), selected: false, onSelected: (_) {}),
           ],
         ),
       ),
     );
   }
+
+  @override
+  double get maxExtent => 64;
+
+  @override
+  double get minExtent => 64;
+
+  @override
+  bool shouldRebuild(covariant SliverPersistentHeaderDelegate oldDelegate) => true;
 }
